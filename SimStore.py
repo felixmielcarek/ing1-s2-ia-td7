@@ -79,7 +79,7 @@ class GameData:
             for y in range(self.mapH):
                 cell = self.map[x, y]
 
-                if cell in ('F') :
+                if cell in ('U','O','B','A','J','L','F','T','P','R','E','G'):
                     stands.append((x, y))
 
         return stands
