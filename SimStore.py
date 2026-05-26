@@ -285,20 +285,17 @@ TableCoul = {
 
 
 class Customer:
-    def __init__(self, game):
-        spawns = game.spawns
-        if not spawns:
-            raise ValueError("No spawn found on the map")
+    def __init__(self, game, spawn_pos):
         if not game.checkouts:
             raise ValueError("No checkout found on the map")
 
-        self.STATE_SHOPPING = "faire_les_courses"
+        self.STATE_SHOPPING    = "faire_les_courses"
         self.STATE_GO_CHECKOUT = "aller_aux_caisses"
-        self.STATE_CHECKOUT = "passage_en_caisse"
+        self.STATE_CHECKOUT    = "passage_en_caisse"
 
-        self.x, self.y = spawns[0]
-        self.x += 0.5 # on demarre au milieu de la case
-        self.y += 0.5
+        sx, sy = spawn_pos
+        self.x = sx + random.random()  # position x aleatoire dans la case [0,1]
+        self.y = sy + 0.5
         nb_targets     = 10
         self.targets   = random.sample(game.stands, nb_targets)
         self.dir       = (0,1)
@@ -469,9 +466,34 @@ def computeDist(dist, tx, ty):
     computeDistJit(dist, G.walkable, tx, ty, G.mapW, G.mapH)
 
 
+class Spawner:
+    RATE        = 2    # clients crees par seconde par spawner
+    MAX_CLIENTS = 200  # nombre maximum de clients par spawner
+
+    def __init__(self, game, spawn_pos):
+        self.game          = game
+        self.spawn_pos     = spawn_pos
+        self.total_spawned = 0
+        self.time_acc      = 0.0
+
+    def update(self, dt):
+        """Cree et retourne les nouveaux clients a spawner ce tour."""
+        new_clients = []
+        if self.total_spawned >= self.MAX_CLIENTS:
+            return new_clients
+        self.time_acc += dt
+        interval = 1.0 / self.RATE
+        while self.time_acc >= interval and self.total_spawned < self.MAX_CLIENTS:
+            self.time_acc -= interval
+            new_clients.append(Customer(self.game, self.spawn_pos))
+            self.total_spawned += 1
+        return new_clients
+
+
 G = GameData(T)
 S = Screen(G.mapW, G.mapH)
-CUST = Customer(G)
+CUSTOMERS = []
+SPAWNERS  = [Spawner(G, pos) for pos in G.spawns]
 S.buildBackground()
 
 
@@ -481,19 +503,24 @@ S.buildBackground()
 def drawMap():
     S.blitBackground()
 
-    CUST.drawCustomer()
-
+    for cust in CUSTOMERS:
+        cust.drawCustomer()
 
     S.drawText(0,-1, "  SPACE = pause", color=Color.white, bigfont=True)
 
-    S.debugDist(CUST.dist)
+    if CUSTOMERS:
+        S.debugDist(CUSTOMERS[0].dist)
 
     S.show()
 
 
 def playOneTurn(dt):
     if not PAUSE_FLAG:
-        CUST.move(dt)
+        for spawner in SPAWNERS:
+            CUSTOMERS.extend(spawner.update(dt))
+        for cust in CUSTOMERS:
+            cust.move(dt)
+        CUSTOMERS[:] = [c for c in CUSTOMERS if c.visible]
 
 
 ##########################################################################
