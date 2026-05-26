@@ -45,6 +45,8 @@ class GameData:
 
         self.spawns = self._getSpawns()
 
+        self.checkouts = self._getCheckouts()
+
 
     ######################################################################
     # map
@@ -90,6 +92,16 @@ class GameData:
                     spawns.append((x, y))
 
         return spawns
+
+    def _getCheckouts(self):
+        checkouts = []
+
+        for x in range(self.mapW):
+            for y in range(self.mapH):
+                if self.map[x, y] == 'S':
+                    checkouts.append((x, y))
+
+        return checkouts
 
 
 #######################################
@@ -249,23 +261,99 @@ class Customer:
         spawns = game.spawns
         if not spawns:
             raise ValueError("No spawn found on the map")
+        if not game.checkouts:
+            raise ValueError("No checkout found on the map")
+
+        self.STATE_SHOPPING = "faire_les_courses"
+        self.STATE_GO_CHECKOUT = "aller_aux_caisses"
+        self.STATE_CHECKOUT = "passage_en_caisse"
 
         self.x, self.y = spawns[0]
         self.x += 0.5 # on demarre au milieu de la case
         self.y += 0.5
-        nb_targets     = 1
+        nb_targets     = 10
         self.targets   = random.sample(game.stands, nb_targets)
         self.dir       = (0,1)
+        self.current_target = None
+        self.arrival_threshold = 1
+        self.state = self.STATE_SHOPPING
+        self.checkout_start_time = None
+        self.visible = True
 
-        if self.targets:
-            computeDist(*self.targets[0])
+        self._selectNearestTarget()
+
+    def _selectNearestTarget(self):
+        """Selectionne le target le plus proche et calcule sa carte de distances."""
+        if not self.targets:
+            self.current_target = None
+            return
+
+        cx, cy = int(self.x), int(self.y)
+        best_target = None
+        best_dist = float('inf')
+
+        for target in self.targets:
+            computeDist(*target)
+            d = G.dist[cx, cy]
+            if d < best_dist:
+                best_dist = d
+                best_target = target
+
+        self.current_target = best_target
+        if best_target:
+            computeDist(*best_target)
+            self.arrival_threshold = 1
+
+    def _selectNearestCheckout(self):
+        """Selectionne la caisse la plus proche depuis la position courante."""
+        cx, cy = int(self.x), int(self.y)
+        best_checkout = None
+        best_dist = float('inf')
+
+        for checkout in G.checkouts:
+            computeDist(*checkout)
+            d = G.dist[cx, cy]
+            if d < best_dist:
+                best_dist = d
+                best_checkout = checkout
+
+        self.current_target = best_checkout
+        if best_checkout:
+            computeDist(*best_checkout)
+            self.arrival_threshold = 0
 
     def move(self):
+        if not self.visible:
+            return
+
+        if self.state == self.STATE_CHECKOUT:
+            if self.checkout_start_time is not None and time.time() - self.checkout_start_time >= 10.0:
+                self.visible = False
+            return
+
+        if self.state == self.STATE_SHOPPING and not self.targets:
+            self.state = self.STATE_GO_CHECKOUT
+            self._selectNearestCheckout()
+
         cx = int(self.x)
         cy = int(self.y)
 
-        if G.dist[cx, cy] <= 1:
-            return  # case adjacente a la cible, on s'arrete
+        if G.dist[cx, cy] <= self.arrival_threshold:
+            if self.state == self.STATE_SHOPPING:
+                # Arrive au target courant : le retirer et choisir le suivant
+                if self.current_target in self.targets:
+                    self.targets.remove(self.current_target)
+
+                if self.targets:
+                    self._selectNearestTarget()
+                else:
+                    self.state = self.STATE_GO_CHECKOUT
+                    self._selectNearestCheckout()
+            elif self.state == self.STATE_GO_CHECKOUT:
+                self.state = self.STATE_CHECKOUT
+                self.checkout_start_time = time.time()
+                self.dir = (0, 0)
+            return
 
         best = None
         best_dist = G.dist[cx, cy]
@@ -284,6 +372,9 @@ class Customer:
             self.y = ny + 0.5
 
     def drawCustomer(self):
+        if not self.visible:
+            return
+
         x,y = self.x, self.y
         dx, dy = self.dir
         norm = math.hypot(dx, dy)
@@ -299,6 +390,8 @@ class Customer:
             S.drawTriangle(A,B,C,Color.white)
 
     def drawTargets(self):
+        if not self.visible:
+            return
 
         for x, y in self.targets:
             S.drawCircle(x+0.5,y+0.5,0.1,Color.white)
