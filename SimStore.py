@@ -199,6 +199,23 @@ class Screen:
                     self.drawText(x+0.5,y+0.5,str(v),Color.white,False,True)
 
 
+    def buildBackground(self):
+        """Dessine le decor statique une seule fois dans un buffer."""
+        self.background = pygame.Surface((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
+        self.background.fill(Color.black)
+        for x in range(G.mapW):
+            for y in range(G.mapH):
+                cell = G.map[x, y]
+                if cell != ' ':
+                    coul = TableCoul[cell]
+                    x1, y1 = self.grid_to_screen(x, y)
+                    pygame.draw.rect(self.background, coul,        (x1, y1 - ZOOM, ZOOM, ZOOM))
+                    pygame.draw.rect(self.background, Color.black, (x1, y1 - ZOOM, ZOOM, ZOOM), 2)
+
+    def blitBackground(self):
+        """Copie le buffer de decor sur l'ecran (remplace clear + double boucle)."""
+        self.screen.blit(self.background, (0, 0))
+
     def show(self):
         pygame.display.flip()
 
@@ -438,27 +455,16 @@ def computeDist(tx, ty):
 G = GameData(T)
 S = Screen(G.mapW, G.mapH)
 CUST = Customer(G)
+S.buildBackground()
 
 
 
 
 
 def drawMap():
-    S.clear()
-    L = ZOOM
-
-    for x in range(G.mapW):
-        for y in range(G.mapH):
-            id = G.map[x,y]
-
-            if id != ' ' :
-                coul = TableCoul[id]
-                S.drawRect(x,y,1,1,coul)
-                S.drawRect(x,y,1,1,Color.black,2)
-
+    S.blitBackground()
 
     CUST.drawCustomer()
-    CUST.drawTargets();
 
 
     S.drawText(0,-1, "  SPACE = pause", color=Color.white, bigfont=True)
