@@ -111,6 +111,7 @@ class GameData:
 ##########################################################################
 
 ZOOM = 40
+SPEED = 2   # cases par seconde
 
 
 class Screen:
@@ -322,7 +323,7 @@ class Customer:
             computeDist(*best_checkout)
             self.arrival_threshold = 0
 
-    def move(self):
+    def move(self, dt):
         if not self.visible:
             return
 
@@ -335,10 +336,10 @@ class Customer:
             self.state = self.STATE_GO_CHECKOUT
             self._selectNearestCheckout()
 
-        cx = int(self.x)
-        cy = int(self.y)
+        ix = int(self.x)
+        iy = int(self.y)
 
-        if G.dist[cx, cy] <= self.arrival_threshold:
+        if G.dist[ix, iy] <= self.arrival_threshold:
             if self.state == self.STATE_SHOPPING:
                 # Arrive au target courant : le retirer et choisir le suivant
                 if self.current_target in self.targets:
@@ -355,21 +356,26 @@ class Customer:
                 self.dir = (0, 0)
             return
 
-        best = None
-        best_dist = G.dist[cx, cy]
-        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
-            nx, ny = cx + dx, cy + dy
+        # Trouver parmi les 4 voisins celui avec la distance minimale
+        best_dir = None
+        best_dist = G.dist[ix, iy]
+        for ddx, ddy in [(-1,0),(1,0),(0,-1),(0,1)]:
+            nx, ny = ix + ddx, iy + ddy
             if 0 <= nx < G.mapW and 0 <= ny < G.mapH:
                 d = G.dist[nx, ny]
                 if d < best_dist:
                     best_dist = d
-                    best = (nx, ny)
+                    best_dir = (ddx, ddy)
 
-        if best is not None:
-            nx, ny = best
-            self.dir = (nx - cx, ny - cy)
-            self.x = nx + 0.5
-            self.y = ny + 0.5
+        if best_dir is not None:
+            self.dir = best_dir
+            self.x += best_dir[0] * SPEED * dt
+            self.y += best_dir[1] * SPEED * dt
+            # Recentre l'axe perpendiculaire au mouvement dans sa case
+            if best_dir[0] != 0:   # deplacement horizontal => snap y
+                self.y = int(self.y) + 0.5
+            else:                  # deplacement vertical   => snap x
+                self.x = int(self.x) + 0.5
 
     def drawCustomer(self):
         if not self.visible:
@@ -464,7 +470,7 @@ def drawMap():
 
 def playOneTurn(dt):
     if not PAUSE_FLAG:
-        CUST.move()
+        CUST.move(dt)
 
 
 ##########################################################################
@@ -475,7 +481,7 @@ def playOneTurn(dt):
 
 PAUSE_FLAG = False
 LOGIC_CALL = pygame.USEREVENT + 1
-LOGIC_fps = 2
+LOGIC_fps = 10
 pygame.time.set_timer(LOGIC_CALL, int(1000 / LOGIC_fps))
 
 running = True
