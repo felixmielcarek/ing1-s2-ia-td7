@@ -2,6 +2,7 @@ import time
 import random
 
 import numpy as np
+from numba import njit
 import pygame
 import math
 
@@ -39,7 +40,7 @@ class GameData:
     def __init__(self, map_text):
         self.map, self.mapW, self.mapH = self._mapCreate(map_text)
 
-        self.dist = np.ones((self.mapW, self.mapH), dtype=np.int32) * 9
+        self.walkable = self._buildWalkableMask()
 
         self.stands = self._findStands()
 
@@ -102,6 +103,15 @@ class GameData:
                     checkouts.append((x, y))
 
         return checkouts
+
+    def _buildWalkableMask(self):
+        """Masque booleeen numpy des cases praticables (utilisable par Numba)."""
+        walkable_chars = {' ', 'W', 'S'}
+        mask = np.zeros((self.mapW, self.mapH), dtype=np.bool_)
+        for x in range(self.mapW):
+            for y in range(self.mapH):
+                mask[x, y] = self.map[x, y] in walkable_chars
+        return mask
 
 
 #######################################
@@ -191,11 +201,11 @@ class Screen:
             ],
         )
 
-    def debugDist(self):
+    def debugDist(self, dist):
         for x in range(G.mapW):
             for y in range(G.mapH):
                 if G.map[x,y] == ' ':
-                    v = G.dist[x,y]
+                    v = dist[x,y]
                     self.drawText(x+0.5,y+0.5,str(v),Color.white,False,True)
 
 
@@ -297,6 +307,7 @@ class Customer:
         self.state = self.STATE_SHOPPING
         self.checkout_start_time = None
         self.visible = True
+        self.dist = np.empty((G.mapW, G.mapH), dtype=np.int32)
 
         self._selectNearestTarget()
 
@@ -311,15 +322,15 @@ class Customer:
         best_dist = float('inf')
 
         for target in self.targets:
-            computeDist(*target)
-            d = G.dist[cx, cy]
+            computeDist(self.dist, *target)
+            d = self.dist[cx, cy]
             if d < best_dist:
                 best_dist = d
                 best_target = target
 
         self.current_target = best_target
         if best_target:
-            computeDist(*best_target)
+            computeDist(self.dist, *best_target)
             self.arrival_threshold = 1
 
     def _selectNearestCheckout(self):
@@ -329,15 +340,15 @@ class Customer:
         best_dist = float('inf')
 
         for checkout in G.checkouts:
-            computeDist(*checkout)
-            d = G.dist[cx, cy]
+            computeDist(self.dist, *checkout)
+            d = self.dist[cx, cy]
             if d < best_dist:
                 best_dist = d
                 best_checkout = checkout
 
         self.current_target = best_checkout
         if best_checkout:
-            computeDist(*best_checkout)
+            computeDist(self.dist, *best_checkout)
             self.arrival_threshold = 0
 
     def move(self, dt):
@@ -356,7 +367,7 @@ class Customer:
         ix = int(self.x)
         iy = int(self.y)
 
-        if G.dist[ix, iy] <= self.arrival_threshold:
+        if self.dist[ix, iy] <= self.arrival_threshold:
             if self.state == self.STATE_SHOPPING:
                 # Arrive au target courant : le retirer et choisir le suivant
                 if self.current_target in self.targets:
@@ -375,11 +386,11 @@ class Customer:
 
         # Trouver parmi les 4 voisins celui avec la distance minimale
         best_dir = None
-        best_dist = G.dist[ix, iy]
+        best_dist = self.dist[ix, iy]
         for ddx, ddy in [(-1,0),(1,0),(0,-1),(0,1)]:
             nx, ny = ix + ddx, iy + ddy
             if 0 <= nx < G.mapW and 0 <= ny < G.mapH:
-                d = G.dist[nx, ny]
+                d = self.dist[nx, ny]
                 if d < best_dist:
                     best_dist = d
                     best_dir = (ddx, ddy)
@@ -420,36 +431,42 @@ class Customer:
             S.drawCircle(x+0.5,y+0.5,0.1,Color.white)
 
 
-def computeDist(tx, ty):
-    """Calcule la carte des distances depuis chaque case vers (tx, ty)."""
-    walkable = {' ', 'W', 'S'}
-
-    # Initialisation
-    for x in range(G.mapW):
-        for y in range(G.mapH):
+@njit(cache=True)
+def computeDistJit(dist, walkable, tx, ty, mapW, mapH):
+    """Version compilee Numba : tableaux numpy et valeurs numeriques uniquement."""
+    for x in range(mapW):
+        for y in range(mapH):
             if x == tx and y == ty:
-                G.dist[x, y] = 0
-            elif G.map[x, y] in walkable:
-                G.dist[x, y] = 100
+                dist[x, y] = 0
+            elif walkable[x, y]:
+                dist[x, y] = 100
             else:
-                G.dist[x, y] = 999
+                dist[x, y] = 999
 
-    # Propagation : min des voisins + 1, jusqu'a stabilite
     changed = True
     while changed:
         changed = False
-        for x in range(G.mapW):
-            for y in range(G.mapH):
-                if G.map[x, y] in walkable:
-                    new_val = min(
-                        G.dist[x-1, y] if x > 0 else 999,
-                        G.dist[x+1, y] if x < G.mapW-1 else 999,
-                        G.dist[x, y-1] if y > 0 else 999,
-                        G.dist[x, y+1] if y < G.mapH-1 else 999,
-                    ) + 1
-                    if new_val < G.dist[x, y]:
-                        G.dist[x, y] = new_val
+        for x in range(mapW):
+            for y in range(mapH):
+                if walkable[x, y]:
+                    best = 999
+                    if x > 0 and dist[x-1, y] < best:
+                        best = dist[x-1, y]
+                    if x < mapW - 1 and dist[x+1, y] < best:
+                        best = dist[x+1, y]
+                    if y > 0 and dist[x, y-1] < best:
+                        best = dist[x, y-1]
+                    if y < mapH - 1 and dist[x, y+1] < best:
+                        best = dist[x, y+1]
+                    new_val = best + 1
+                    if new_val < dist[x, y]:
+                        dist[x, y] = new_val
                         changed = True
+
+
+def computeDist(dist, tx, ty):
+    """Calcule la carte des distances vers (tx, ty) dans le tableau dist fourni."""
+    computeDistJit(dist, G.walkable, tx, ty, G.mapW, G.mapH)
 
 
 G = GameData(T)
@@ -469,7 +486,7 @@ def drawMap():
 
     S.drawText(0,-1, "  SPACE = pause", color=Color.white, bigfont=True)
 
-    S.debugDist()
+    S.debugDist(CUST.dist)
 
     S.show()
 
