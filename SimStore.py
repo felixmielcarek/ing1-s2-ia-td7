@@ -216,6 +216,7 @@ class Screen:
                     self.drawText(x+0.5,y+0.5,str(v),Color.white,False,True)
 
 
+    # Etape 6: le décor
     def buildBackground(self):
         """Dessine le decor statique une seule fois dans un buffer."""
         self.background = pygame.Surface((self.SCREEN_WIDTH, self.SCREEN_HEIGHT))
@@ -229,6 +230,7 @@ class Screen:
                     pygame.draw.rect(self.background, coul,        (x1, y1 - ZOOM, ZOOM, ZOOM))
                     pygame.draw.rect(self.background, Color.black, (x1, y1 - ZOOM, ZOOM, ZOOM), 2)
 
+    # Etape 6: le décor (suite)
     def blitBackground(self):
         """Copie le buffer de decor sur l'ecran (remplace clear + double boucle)."""
         self.screen.blit(self.background, (0, 0))
@@ -311,15 +313,16 @@ class Customer:
         if not game.checkouts:
             raise ValueError("No checkout found on the map")
 
+        # Etape 4: machine à états
         self.STATE_SHOPPING    = "faire_les_courses"
         self.STATE_GO_CHECKOUT = "aller_aux_caisses"
         self.STATE_CHECKOUT    = "passage_en_caisse"
 
         sx, sy = spawn_pos
-        self.x = sx + random.random()  # position x aleatoire dans la case [0,1]
+        self.x = sx + random.random()  # Etape 5: coordonnées flottantes / Etape 8: x aléatoire dans [0,1]
         self.y = sy + 0.5
         nb_targets     = 10
-        self.targets   = random.sample(game.stands, nb_targets)
+        self.targets   = random.sample(game.stands, nb_targets)  # Etape 3: multi-targets
         self.dir       = (0,1)
         self.current_target = None
         self.arrival_threshold = 1
@@ -329,6 +332,7 @@ class Customer:
 
         self._selectNearestTarget()
 
+    # Etape 3: multi-targets — choix du target le plus proche
     def _selectNearestTarget(self):
         """Selectionne le target le plus proche (distances binaires)."""
         if not self.targets:
@@ -348,6 +352,7 @@ class Customer:
         self.current_target = best_target
         self.arrival_threshold = 1
 
+    # Etape 4: machine à états — aller à la caisse la plus proche
     def _selectNearestCheckout(self):
         """Selectionne la caisse la plus proche depuis la position courante."""
         cx, cy = int(self.x), int(self.y)
@@ -367,6 +372,7 @@ class Customer:
         if not self.visible:
             return
 
+        # Etape 4: machine à états — passage en caisse (attente 10s puis disparition)
         if self.state == self.STATE_CHECKOUT:
             if self.checkout_start_time is not None and time.time() - self.checkout_start_time >= 10.0:
                 self.visible = False
@@ -416,12 +422,12 @@ class Customer:
                 self.dir = (0, 0)
             return
 
-        # Correction de vitesse : v_corrigee = v / max(1, nb_clients_sur_case - 2)
+        # Etape 9: Sytadin — correction de vitesse selon densité
         density_here = DENSITY[ix, iy]
         speed = SPEED / max(1, density_here - 2)
 
-        # Navigation : suivre le gradient de la carte des distances (hop count)
-        # Une case est bloquee si elle contient deja 8 clients ou plus
+        # Etape 2: déplacement — suivre le gradient de la carte des distances
+        # Etape 10: blocage — ignorer les cases avec >= 8 clients
         CAPACITY = 8
         best_dir = None
         best_d = dist_map[ix, iy]
@@ -437,7 +443,7 @@ class Customer:
 
         if best_dir is not None:
             self.dir = best_dir
-            self.x += best_dir[0] * speed * dt
+            self.x += best_dir[0] * speed * dt  # Etape 5: déplacement continu (direction * vitesse * dt)
             self.y += best_dir[1] * speed * dt
             # Recentre l'axe perpendiculaire au mouvement dans sa case
             if best_dir[0] != 0:   # deplacement horizontal => snap y
@@ -471,18 +477,25 @@ class Customer:
             S.drawCircle(x+0.5,y+0.5,0.1,Color.white)
 
 
+# Etape 7: carte des distances — compilée avec Numba (@njit)
 @njit(cache=True)
 def computeDistJit(dist, walkable, tx, ty, mapW, mapH):
-    """Version compilee Numba : tableaux numpy et valeurs numeriques uniquement."""
+    # dist     : tableau numpy int32 (mapW × mapH) — résultat écrit dedans
+    # walkable : tableau numpy bool  (mapW × mapH) — cases praticables
+    # tx, ty   : coordonnées de la cible (distance 0)
+    # mapW/H   : dimensions de la grille
+
+    # Etape 1: déplacement optimal — initialisation de la carte des distances
     for x in range(mapW):
         for y in range(mapH):
-            if x == tx and y == ty:
+            if x == tx and y == ty: # la cible
                 dist[x, y] = 0
-            elif walkable[x, y]:
+            elif walkable[x, y]: # les cases marchables
                 dist[x, y] = mapW * mapH
-            else:
+            else: # les murs
                 dist[x, y] = mapW * mapH + 1
 
+    # Etape 1: déplacement optimal — propagation jusqu'à stabilisation
     changed = True
     while changed:
         changed = False
@@ -509,6 +522,7 @@ def computeDist(dist, tx, ty):
     computeDistJit(dist, G.walkable, tx, ty, G.mapW, G.mapH)
 
 
+# Etape 8: les spawners — 200 clients, 2 par seconde par spawner
 class Spawner:
     RATE        = 2    # clients crees par seconde par spawner
     MAX_CLIENTS = 200  # nombre maximum de clients par spawner
@@ -543,6 +557,7 @@ DENSITY = np.zeros((G.mapW, G.mapH), dtype=np.int32)
 DIST_CACHE_BIN = {}   # cache permanent : distances (hop count) par cible
 
 
+# Etape 7: carte des distances — cache par cible (une carte par target)
 def getBinaryDist(target):
     """Distance binaire (hop count) vers target, mise en cache permanente."""
     if target not in DIST_CACHE_BIN:
@@ -552,6 +567,7 @@ def getBinaryDist(target):
     return DIST_CACHE_BIN[target]
 
 
+# Etape 9: Sytadin — comptage du nombre de clients par case
 def buildDensity():
     """Met a jour DENSITY depuis les positions des clients en deplacement."""
     DENSITY[:] = 0
@@ -562,13 +578,10 @@ def buildDensity():
                 DENSITY[ix, iy] += 1
 
 
-
-
-
 def drawMap():
     S.blitBackground()
 
-    # Rendu des allees avec code couleur densite (style sytadin)
+    # Etape 9: Sytadin — rendu des allées avec code couleur densité
     for x in range(G.mapW):
         for y in range(G.mapH):
             if G.map[x, y] in (' ', 'W', 'S'):
@@ -605,7 +618,7 @@ def playOneTurn(dt):
 
 PAUSE_FLAG = False
 LOGIC_CALL = pygame.USEREVENT + 1
-LOGIC_fps = 10
+LOGIC_fps = 10  # Etape 5: mode déplacement continu — 10 appels/s à playOneTurn
 pygame.time.set_timer(LOGIC_CALL, int(1000 / LOGIC_fps))
 
 running = True
