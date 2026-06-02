@@ -74,13 +74,20 @@ class GameData:
 
     def _findStands(self):
         stands = []
+        walkable_chars = {' ', 'W', 'S'}
 
         for x in range(self.mapW):
             for y in range(self.mapH):
                 cell = self.map[x, y]
 
                 if cell in ('U','O','B','A','J','L','F','T','P','R','E','G'):
-                    stands.append((x, y))
+                    # N'inclure le stand que s'il a au moins un voisin marchable
+                    for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < self.mapW and 0 <= ny < self.mapH:
+                            if self.map[nx, ny] in walkable_chars:
+                                stands.append((x, y))
+                                break
 
         return stands
 
@@ -121,7 +128,7 @@ class GameData:
 ##########################################################################
 
 ZOOM = 40
-SPEED = 2   # cases par seconde
+SPEED = 5   # cases par seconde
 
 
 class Screen:
@@ -283,6 +290,21 @@ TableCoul = {
 'W' : (40,40,40)          #spawn
 }
 
+DENSITY_COLORS = [
+    (183, 228, 199),  # 0 clients - vert
+    (183, 228, 199),  # 1 client
+    (183, 228, 199),  # 2 clients
+    (144, 214, 180),
+    (104, 200, 160),
+    (178, 222, 122),
+    (222, 230, 109),
+    (255, 214, 102),
+    (255, 183, 77),
+    (255, 138, 51),
+    (240, 84, 44),
+    (214, 40, 40),    # 11+ clients - rouge
+]
+
 
 class Customer:
     def __init__(self, game, spawn_pos):
@@ -304,12 +326,11 @@ class Customer:
         self.state = self.STATE_SHOPPING
         self.checkout_start_time = None
         self.visible = True
-        self.dist = np.empty((G.mapW, G.mapH), dtype=np.int32)
 
         self._selectNearestTarget()
 
     def _selectNearestTarget(self):
-        """Selectionne le target le plus proche et calcule sa carte de distances."""
+        """Selectionne le target le plus proche (distances binaires)."""
         if not self.targets:
             self.current_target = None
             return
@@ -319,16 +340,13 @@ class Customer:
         best_dist = float('inf')
 
         for target in self.targets:
-            computeDist(self.dist, *target)
-            d = self.dist[cx, cy]
+            d = getBinaryDist(target)[cx, cy]
             if d < best_dist:
                 best_dist = d
                 best_target = target
 
         self.current_target = best_target
-        if best_target:
-            computeDist(self.dist, *best_target)
-            self.arrival_threshold = 1
+        self.arrival_threshold = 1
 
     def _selectNearestCheckout(self):
         """Selectionne la caisse la plus proche depuis la position courante."""
@@ -337,16 +355,13 @@ class Customer:
         best_dist = float('inf')
 
         for checkout in G.checkouts:
-            computeDist(self.dist, *checkout)
-            d = self.dist[cx, cy]
+            d = getBinaryDist(checkout)[cx, cy]
             if d < best_dist:
                 best_dist = d
                 best_checkout = checkout
 
         self.current_target = best_checkout
-        if best_checkout:
-            computeDist(self.dist, *best_checkout)
-            self.arrival_threshold = 0
+        self.arrival_threshold = 0
 
     def move(self, dt):
         if not self.visible:
@@ -361,10 +376,30 @@ class Customer:
             self.state = self.STATE_GO_CHECKOUT
             self._selectNearestCheckout()
 
+        if self.current_target is None:
+            return
+
+        dist_map = getBinaryDist(self.current_target)
+
         ix = int(self.x)
         iy = int(self.y)
 
-        if self.dist[ix, iy] <= self.arrival_threshold:
+        # Garde-fou : cible inatteignable depuis la case courante → on la saute
+        UNREACHABLE = G.mapW * G.mapH
+        if dist_map[ix, iy] >= UNREACHABLE:
+            if self.state == self.STATE_SHOPPING:
+                if self.current_target in self.targets:
+                    self.targets.remove(self.current_target)
+                if self.targets:
+                    self._selectNearestTarget()
+                else:
+                    self.state = self.STATE_GO_CHECKOUT
+                    self._selectNearestCheckout()
+            elif self.state == self.STATE_GO_CHECKOUT:
+                self._selectNearestCheckout()
+            return
+
+        if dist_map[ix, iy] <= self.arrival_threshold:
             if self.state == self.STATE_SHOPPING:
                 # Arrive au target courant : le retirer et choisir le suivant
                 if self.current_target in self.targets:
@@ -381,21 +416,29 @@ class Customer:
                 self.dir = (0, 0)
             return
 
-        # Trouver parmi les 4 voisins celui avec la distance minimale
+        # Correction de vitesse : v_corrigee = v / max(1, nb_clients_sur_case - 2)
+        density_here = DENSITY[ix, iy]
+        speed = SPEED / max(1, density_here - 2)
+
+        # Navigation : suivre le gradient de la carte des distances (hop count)
+        # Une case est bloquee si elle contient deja 8 clients ou plus
+        CAPACITY = 8
         best_dir = None
-        best_dist = self.dist[ix, iy]
+        best_d = dist_map[ix, iy]
         for ddx, ddy in [(-1,0),(1,0),(0,-1),(0,1)]:
             nx, ny = ix + ddx, iy + ddy
             if 0 <= nx < G.mapW and 0 <= ny < G.mapH:
-                d = self.dist[nx, ny]
-                if d < best_dist:
-                    best_dist = d
+                if DENSITY[nx, ny] >= CAPACITY:
+                    continue
+                d = dist_map[nx, ny]
+                if d < best_d:
+                    best_d = d
                     best_dir = (ddx, ddy)
 
         if best_dir is not None:
             self.dir = best_dir
-            self.x += best_dir[0] * SPEED * dt
-            self.y += best_dir[1] * SPEED * dt
+            self.x += best_dir[0] * speed * dt
+            self.y += best_dir[1] * speed * dt
             # Recentre l'axe perpendiculaire au mouvement dans sa case
             if best_dir[0] != 0:   # deplacement horizontal => snap y
                 self.y = int(self.y) + 0.5
@@ -436,9 +479,9 @@ def computeDistJit(dist, walkable, tx, ty, mapW, mapH):
             if x == tx and y == ty:
                 dist[x, y] = 0
             elif walkable[x, y]:
-                dist[x, y] = 100
+                dist[x, y] = mapW * mapH
             else:
-                dist[x, y] = 999
+                dist[x, y] = mapW * mapH + 1
 
     changed = True
     while changed:
@@ -446,7 +489,7 @@ def computeDistJit(dist, walkable, tx, ty, mapW, mapH):
         for x in range(mapW):
             for y in range(mapH):
                 if walkable[x, y]:
-                    best = 999
+                    best = mapW * mapH + 1
                     if x > 0 and dist[x-1, y] < best:
                         best = dist[x-1, y]
                     if x < mapW - 1 and dist[x+1, y] < best:
@@ -496,6 +539,28 @@ CUSTOMERS = []
 SPAWNERS  = [Spawner(G, pos) for pos in G.spawns]
 S.buildBackground()
 
+DENSITY = np.zeros((G.mapW, G.mapH), dtype=np.int32)
+DIST_CACHE_BIN = {}   # cache permanent : distances (hop count) par cible
+
+
+def getBinaryDist(target):
+    """Distance binaire (hop count) vers target, mise en cache permanente."""
+    if target not in DIST_CACHE_BIN:
+        dist = np.empty((G.mapW, G.mapH), dtype=np.int32)
+        computeDist(dist, *target)
+        DIST_CACHE_BIN[target] = dist
+    return DIST_CACHE_BIN[target]
+
+
+def buildDensity():
+    """Met a jour DENSITY depuis les positions des clients en deplacement."""
+    DENSITY[:] = 0
+    for c in CUSTOMERS:
+        if c.visible and c.state != c.STATE_CHECKOUT:
+            ix, iy = int(c.x), int(c.y)
+            if 0 <= ix < G.mapW and 0 <= iy < G.mapH:
+                DENSITY[ix, iy] += 1
+
 
 
 
@@ -503,13 +568,18 @@ S.buildBackground()
 def drawMap():
     S.blitBackground()
 
+    # Rendu des allees avec code couleur densite (style sytadin)
+    for x in range(G.mapW):
+        for y in range(G.mapH):
+            if G.map[x, y] in (' ', 'W', 'S'):
+                n = DENSITY[x, y]
+                coul = DENSITY_COLORS[min(n, len(DENSITY_COLORS) - 1)]
+                S.drawRect(x, y, 1, 1, coul)
+
     for cust in CUSTOMERS:
         cust.drawCustomer()
 
-    S.drawText(0,-1, "  SPACE = pause", color=Color.white, bigfont=True)
-
-    if CUSTOMERS:
-        S.debugDist(CUSTOMERS[0].dist)
+    S.drawText(0, -1, "  SPACE = pause", color=Color.white, bigfont=True)
 
     S.show()
 
@@ -518,6 +588,10 @@ def playOneTurn(dt):
     if not PAUSE_FLAG:
         for spawner in SPAWNERS:
             CUSTOMERS.extend(spawner.update(dt))
+
+        # Recalcul de la densite (vitesse corrigee par case)
+        buildDensity()
+
         for cust in CUSTOMERS:
             cust.move(dt)
         CUSTOMERS[:] = [c for c in CUSTOMERS if c.visible]
