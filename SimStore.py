@@ -394,8 +394,21 @@ class Customer:
 
         if best_dir is not None:
             self.dir = best_dir
-            self.x += best_dir[0] * SPEED * dt
-            self.y += best_dir[1] * SPEED * dt
+            
+            # Étape 9
+            # Pas de pénalité si densité <= 3
+            DENSITY_MAP_LOCAL = np.zeros((G.mapW, G.mapH), dtype=np.int32)
+            for cust in CUSTOMERS:
+                cix, ciy = int(cust.x), int(cust.y)
+                if 0 <= cix < G.mapW and 0 <= ciy < G.mapH and G.walkable[cix, ciy]:
+                    DENSITY_MAP_LOCAL[cix, ciy] += 1
+            
+            ix, iy = int(self.x), int(self.y)
+            density = DENSITY_MAP_LOCAL[ix, iy] if (0 <= ix < G.mapW and 0 <= iy < G.mapH) else 1
+            speed_factor = 1.0 if density <= 3 else 1.0 / math.sqrt(max(1, density / 3.0))
+            
+            self.x += best_dir[0] * SPEED * speed_factor * dt
+            self.y += best_dir[1] * SPEED * speed_factor * dt
             # Recentre l'axe perpendiculaire au mouvement dans sa case
             if best_dir[0] != 0:   # deplacement horizontal => snap y
                 self.y = int(self.y) + 0.5
@@ -503,13 +516,41 @@ S.buildBackground()
 def drawMap():
     S.blitBackground()
 
+    # Étape 9: Calculer densité de clients par case walkable
+    DENSITY_MAP = np.zeros((G.mapW, G.mapH), dtype=np.int32)
+    for cust in CUSTOMERS:
+        ix, iy = int(cust.x), int(cust.y)
+        if 0 <= ix < G.mapW and 0 <= iy < G.mapH and G.walkable[ix, iy]:
+            DENSITY_MAP[ix, iy] += 1
+
+    # Palette Sytadin
+    SYTADIN_COLORS = [
+        (183, 228, 199), # vert
+        (183, 228, 199),
+        (183, 228, 199),
+        (144, 214, 180),
+        (104, 200, 160),
+        (178, 222, 122),
+        (222, 230, 109),
+        (255, 214, 102),
+        (255, 183, 77),
+        (255, 138, 51),
+        (240, 84, 44),
+        (214, 40, 40),  # rouge
+    ]
+
+    # Afficher la heatmap des allées
+    for x in range(G.mapW):
+        for y in range(G.mapH):
+            if G.walkable[x, y]:
+                density = min(DENSITY_MAP[x, y], len(SYTADIN_COLORS) - 1)
+                color = SYTADIN_COLORS[density]
+                S.drawRect(x, y, 1, 1, color, width=0)
+
     for cust in CUSTOMERS:
         cust.drawCustomer()
 
-    S.drawText(0,-1, "  SPACE = pause", color=Color.white, bigfont=True)
-
-    if CUSTOMERS:
-        S.debugDist(CUSTOMERS[0].dist)
+    S.drawText(0, -1, f"  SPACE = pause | Clients: {len(CUSTOMERS)}", color=Color.white, bigfont=True)
 
     S.show()
 
